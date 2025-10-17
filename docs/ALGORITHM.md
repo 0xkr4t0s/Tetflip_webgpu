@@ -82,16 +82,20 @@ For each tetrahedron T:
 
 #### 3.2 Solve for Pressure
 
-Using Jacobi iteration (simplified):
+Using Jacobi iteration:
 
 ```
 For iteration = 1 to max_iterations:
     For each node i:
+        // Simplified Jacobi: this is a basic approximation
+        // In practice, should use discretized Laplacian entries
         p_new[i] = (sum(p_neighbors) - rhs[i]) / num_neighbors
     
     if converged:
         break
 ```
+
+**Note**: This is a simplified version. A proper implementation should use the discretized Laplacian matrix with appropriate coefficients based on mesh geometry.
 
 **Key Points**:
 - Can use more advanced solvers (Conjugate Gradient, Multigrid)

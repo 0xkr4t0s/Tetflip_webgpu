@@ -6,7 +6,7 @@
 
 1. **Node.js** (optional, for development tools)
 2. **Modern browser** with WebGPU support:
-   - Chrome 113+ (enable via `chrome://flags/#enable-unsafe-webgpu`)
+   - Chrome 113+ (enable via `chrome://flags/#enable-webgpu`)
    - Edge 113+
    - Firefox Nightly
    - Safari Technology Preview
