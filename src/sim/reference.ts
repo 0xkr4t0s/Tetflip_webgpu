@@ -439,16 +439,23 @@ function separateParticles(solver: ReferenceSolver, dt: number): void {
   const margin = mesh.spacing * 0.02;
   const next = new Float64Array(particles.count * 3);
   const k = Math.min(1, params.separation * dt) * s;
+  const pos = particles.positions;
+  // Same cut-offs as the GPU kernel (R ≤ dist or dist < 1e-6 R is skipped), tested on d².
+  const maxD2 = R * R, minD2 = (1e-6 * R) ** 2;
   for (let i = 0; i < particles.count; i++) {
-    const xi = [particles.positions[i * 4], particles.positions[i * 4 + 1], particles.positions[i * 4 + 2]];
+    const xi = [pos[i * 4], pos[i * 4 + 1], pos[i * 4 + 2]];
     const push = [0, 0, 0];
+    // O(n²) pair loop: keep it allocation-free, it dominates the reference step's cost.
     for (let j = 0; j < particles.count; j++) {
       if (j === i) continue;
-      const d = [0, 1, 2].map((c) => xi[c] - particles.positions[j * 4 + c]);
-      const dist = Math.hypot(d[0], d[1], d[2]);
-      if (dist >= R || dist < 1e-6 * R) continue;
-      const w = 1 - dist / R;
-      for (let c = 0; c < 3; c++) push[c] += (d[c] / dist) * w;
+      const dx = xi[0] - pos[j * 4], dy = xi[1] - pos[j * 4 + 1], dz = xi[2] - pos[j * 4 + 2];
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 >= maxD2 || d2 < minD2) continue;
+      const dist = Math.sqrt(d2);
+      const w = (1 - dist / R) / dist;
+      push[0] += dx * w;
+      push[1] += dy * w;
+      push[2] += dz * w;
     }
     for (let c = 0; c < 3; c++) {
       const dl = xi[c] - lo[c], dh = hi[c] - xi[c];
