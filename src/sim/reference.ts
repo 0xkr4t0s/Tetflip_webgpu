@@ -17,7 +17,7 @@
 import type { PreparedMesh } from '../mesh/prepare';
 import { barycentric, locate } from '../mesh/prepare';
 import type { Vec3 } from '../math/vec3';
-import { DENSITY_DEADZONE, type SimParams } from './params';
+import { DENSITY_DEADZONE, particleSpacing, SEPARATION_MAX_STEP, SEPARATION_RADIUS, SEPARATION_SURFACE_BAND, type SimParams } from './params';
 
 export interface ParticleState {
   count: number;
@@ -97,9 +97,11 @@ export class ReferenceSolver {
     this.assemble(dt);
     this.solvePressure();
     this.project();
+    this.extrapolate();
     this.tetToNodes();
     this.meshToParticles();
     this.advect(dt);
+    this.separate(dt);
   }
 
   /** Adjoint of the subdivided-tet interpolation, plus the Zhu–Bridson level set. */
@@ -315,13 +317,19 @@ export class ReferenceSolver {
     return Math.sqrt(rr);
   }
 
-  /** u_t ← u_t - [∇]_t p̂ where p̂ holds liquid pressures and ghost values for air nodes. */
+  /**
+   * u_t ← u_t - [∇]_t p̂ where p̂ holds liquid pressures and ghost values for air nodes.
+   * Afterwards only tets touching the liquid count as valid, so the following extrapolation
+   * replaces the unprojected velocities of pure-air tets near the surface with projected ones
+   * (otherwise surface particles would keep sampling free-fall velocities and sink).
+   */
   project(): void {
     const { mesh, nodePhi, pressure } = this;
     const P = mesh.tetPlanes;
     for (let t = 0; t < mesh.tetCount; t++) {
       let anyLiquid = false;
       for (let a = 0; a < 4; a++) if (nodePhi[mesh.tets[t * 4 + a]] < 0) anyLiquid = true;
+      this.tetValid[t] = anyLiquid ? 1 : 0;
       if (!anyLiquid) continue;
       const ph = [0, 0, 0, 0];
       for (let a = 0; a < 4; a++) {
@@ -384,6 +392,10 @@ export class ReferenceSolver {
     }
   }
 
+  separate(dt: number): void {
+    separateParticles(this, dt);
+  }
+
   /** Midpoint (RK2) advection through the projected mesh velocity, then wall clamping. */
   advect(dt: number): void {
     const { mesh, particles } = this;
@@ -409,6 +421,63 @@ export class ReferenceSolver {
       }
       particles.tets[i] = locate(mesh, particlePos(particles, i), tm);
     }
+  }
+}
+
+/**
+ * Position correction (Ando et al. 2012, as used in TETFLIP §3): pushes particles closer than
+ * the rest spacing apart, with walls acting as mirrors. Within the surface band only the
+ * tangential part of the correction is kept so the surface stays smooth. Positions change,
+ * velocities do not. Brute force here; the GPU uses a uniform-grid neighbour search.
+ */
+function separateParticles(solver: ReferenceSolver, dt: number): void {
+  const { mesh, particles, params } = solver;
+  if (params.separation <= 0 || params.restDensity <= 0) return;
+  const s = particleSpacing(params);
+  const R = SEPARATION_RADIUS * s;
+  const lo = mesh.boundsMin, hi = mesh.boundsMax;
+  const margin = mesh.spacing * 0.02;
+  const next = new Float64Array(particles.count * 3);
+  const k = Math.min(1, params.separation * dt) * s;
+  for (let i = 0; i < particles.count; i++) {
+    const xi = [particles.positions[i * 4], particles.positions[i * 4 + 1], particles.positions[i * 4 + 2]];
+    const push = [0, 0, 0];
+    for (let j = 0; j < particles.count; j++) {
+      if (j === i) continue;
+      const d = [0, 1, 2].map((c) => xi[c] - particles.positions[j * 4 + c]);
+      const dist = Math.hypot(d[0], d[1], d[2]);
+      if (dist >= R || dist < 1e-6 * R) continue;
+      const w = 1 - dist / R;
+      for (let c = 0; c < 3; c++) push[c] += (d[c] / dist) * w;
+    }
+    for (let c = 0; c < 3; c++) {
+      const dl = xi[c] - lo[c], dh = hi[c] - xi[c];
+      if (dl < R / 2) push[c] += 1 - (2 * dl) / R;
+      if (dh < R / 2) push[c] -= 1 - (2 * dh) / R;
+    }
+    const delta = push.map((v) => v * k);
+    // Tangential only near the surface: φ and ∇φ from the linear level set in the particle's tet.
+    const t = particles.tets[i];
+    const b = barycentric(mesh.tetPlanes, t, xi as Vec3);
+    let phi = 0;
+    const grad = [0, 0, 0];
+    for (let a = 0; a < 4; a++) {
+      const pa = solver.nodePhi[mesh.tets[t * 4 + a]];
+      phi += Math.max(b[a], 0) * pa;
+      for (let c = 0; c < 3; c++) grad[c] += mesh.tetPlanes[t * 16 + a * 4 + c] * pa;
+    }
+    const gl = Math.hypot(grad[0], grad[1], grad[2]);
+    if (phi > -SEPARATION_SURFACE_BAND * s && gl > 1e-6) {
+      const dn = (delta[0] * grad[0] + delta[1] * grad[1] + delta[2] * grad[2]) / (gl * gl);
+      for (let c = 0; c < 3; c++) delta[c] -= dn * grad[c];
+    }
+    const len = Math.hypot(delta[0], delta[1], delta[2]);
+    const scale = len > SEPARATION_MAX_STEP * s ? (SEPARATION_MAX_STEP * s) / len : 1;
+    for (let c = 0; c < 3; c++) next[i * 3 + c] = clamp(xi[c] + delta[c] * scale, lo[c] + margin, hi[c] - margin);
+  }
+  for (let i = 0; i < particles.count; i++) {
+    for (let c = 0; c < 3; c++) particles.positions[i * 4 + c] = next[i * 3 + c];
+    particles.tets[i] = locate(mesh, particlePos(particles, i), particles.tets[i]);
   }
 }
 

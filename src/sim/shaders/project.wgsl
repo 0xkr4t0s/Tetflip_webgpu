@@ -1,4 +1,5 @@
-// u_t ← u_t - [∇]_t p̂, with ghost pressures for the tet's air nodes.
+// u_t ← u_t - [∇]_t p̂, with ghost pressures for the tet's air nodes. Marks tets touching the
+// liquid as valid (w = 1) so the following extrapolation overwrites pure-air tets.
 @group(0) @binding(0) var<uniform> sim: Sim;
 @group(0) @binding(1) var<storage, read> tetNodes: array<vec4u>;
 @group(0) @binding(2) var<storage, read> tetGeom: array<vec4f>;
@@ -12,7 +13,10 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   if (t >= sim.tetCount) { return; }
   let nodes = tetNodes[t];
   var phi = vec4f(nodeState[nodes.x].x, nodeState[nodes.y].x, nodeState[nodes.z].x, nodeState[nodes.w].x);
-  if (all(phi >= vec4f(0.0))) { return; }
+  if (all(phi >= vec4f(0.0))) {
+    tetVel[t].w = 0.0;
+    return;
+  }
   let pl = vec4f(pressure[nodes.x], pressure[nodes.y], pressure[nodes.z], pressure[nodes.w]);
   var P = loadPlanes(t);
   let V = tetVolume(t);
@@ -23,5 +27,5 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     grad += P[a].xyz * pa;
   }
   let u = tetVel[t];
-  tetVel[t] = vec4f(u.xyz - grad, u.w);
+  tetVel[t] = vec4f(u.xyz - grad, 1.0);
 }

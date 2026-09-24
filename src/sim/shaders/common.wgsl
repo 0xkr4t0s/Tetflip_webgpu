@@ -9,6 +9,18 @@ struct Sim {
   volumeCorrection: f32, restDensity: f32, densityDeadzone: f32, numPartials: u32,
   forcePos: vec3f, forceRadius: f32,
   forceVel: vec3f, forceStrength: f32,
+  hashDims: vec3u, hashCellSize: f32,
+  separationStep: f32, particleSpacing: f32, separationRadius: f32, separationMaxStep: f32,
+  separationBand: f32, _pad0: f32, _pad1: f32, _pad2: f32,
+}
+
+// Uniform neighbour-search grid used by the particle position correction.
+fn hashCell(p: vec3f) -> vec3i {
+  return clamp(vec3i(floor((p - sim.boundsMin) / sim.hashCellSize)), vec3i(0), vec3i(sim.hashDims) - vec3i(1));
+}
+
+fn hashIndex(c: vec3i) -> u32 {
+  return u32(c.x) + sim.hashDims.x * (u32(c.y) + sim.hashDims.y * u32(c.z));
 }
 
 const WG: u32 = 128u;

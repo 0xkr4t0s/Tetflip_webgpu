@@ -1,220 +1,118 @@
-# TETFLIP WebGPU - Liquid Simulator
+# TETFLIP · WebGPU
 
-A real-time liquid simulation implementation using the TETFLIP technique from the paper ["A Highly Adaptive Liquid Simulator on Tetrahedral Meshes"](https://dl.acm.org/doi/10.1145/2461912.2461982) by Ryoichi Ando, Nils Thuerey, and Chris Wojtan (SIGGRAPH 2013), implemented in WebGPU.
+Real-time liquid simulation on **tetrahedral meshes**, running entirely on the GPU with WebGPU.
+It implements the discretization from [*A Highly Adaptive Liquid Simulator on Tetrahedral
+Meshes*](https://doi.org/10.1145/2461912.2461982) (Ando, Thuerey & Wojtan, SIGGRAPH 2013) and
+renders the result as a smooth, refractive liquid surface.
 
-## Overview
+- **TETFLIP pressure projection** (paper §3): velocities at tetrahedron centres, pressures at
+  mesh nodes, and the projection `[∇]ᵀV[∇] p = [∇]ᵀV u` solved with Jacobi-preconditioned CG.
+- **Second-order free surface**: the paper's symmetric ghost-fluid coefficients (Eq. 12).
+- **FLIP particles** with the paper's subdivided-tetrahedron velocity interpolation and its
+  adjoint for particle-to-mesh transfer.
+- **Everything on the GPU**: 17 small WGSL compute kernels, with no CPU round trips during a step.
+- **Screen-space fluid rendering**: sphere-impostor depth and thickness, bilateral smoothing, and
+  Fresnel, refraction and Beer–Lambert absorption.
+- **Verified**: the GPU solver is checked field by field against an f64 CPU reference, and the
+  reference is unit tested (exact hydrostatics, divergence-free projection, matrix symmetry).
 
-TETFLIP combines the strengths of:
-- **Tetrahedral Meshes**: Adaptive unstructured mesh for spatial discretization
-- **FLIP Method**: Fluid-Implicit-Particle method for advection with reduced numerical dissipation
-- **Pressure Projection**: Enforces incompressibility constraint
-- **Adaptive Refinement**: Dynamic mesh adaptation based on flow features (planned feature)
+## Running it
 
-This implementation provides a fully interactive 3D liquid simulation that runs entirely in the browser using WebGPU for GPU-accelerated physics computation and rendering.
+You need Node 20+ and a browser with WebGPU (Chrome/Edge 113+, Safari 26+, or Firefox 141+ on
+Windows).
 
-## Features
-
-### Current Features
-- ✅ Tetrahedral mesh generation and management
-- ✅ FLIP particle advection system
-- ✅ Pressure projection solver for incompressibility
-- ✅ Interactive 3D visualization with WebGPU
-- ✅ Real-time parameter adjustment
-- ✅ Dam break scenario demonstration
-- ✅ Particle and mesh wireframe rendering
-- ✅ Camera controls (orbit and zoom)
-
-### Planned Features
-- 🔲 GPU-accelerated compute shaders for physics
-- 🔲 Adaptive mesh refinement based on flow features
-- 🔲 Surface reconstruction and rendering
-- 🔲 Multiple simulation scenarios
-- 🔲 Viscosity effects
-- 🔲 Two-way rigid body coupling
-- 🔲 Performance optimizations
-
-## Prerequisites
-
-To run this simulator, you need:
-- A modern web browser with WebGPU support:
-  - Chrome/Edge 113+ (with WebGPU enabled)
-  - Firefox Nightly (with WebGPU enabled)
-  - Safari Technology Preview (with WebGPU enabled)
-- A GPU that supports WebGPU
-
-## Installation & Usage
-
-### Local Development
-
-1. Clone the repository:
 ```bash
-git clone https://github.com/0xkr4t0s/Tetflip_webgpu.git
-cd Tetflip_webgpu
+npm install
+npm run dev          # http://localhost:5173
 ```
 
-2. Start a local web server (WebGPU requires a secure context):
-```bash
-# Using Python 3
-python -m http.server 8000
+### Controls
 
-# Or using Node.js with http-server
-npx http-server -p 8000
+| Input | Action |
+| --- | --- |
+| drag | orbit |
+| right-drag / two-finger drag | pan |
+| wheel / pinch | zoom |
+| <kbd>Shift</kbd> + drag (or enable *drag pushes liquid*) | push the liquid |
+| <kbd>Space</kbd> | pause |
+| <kbd>R</kbd> | reset the scene |
+| <kbd>V</kbd> | toggle liquid surface / particles |
+| <kbd>M</kbd> | toggle the tetrahedral mesh slice (coloured by pressure) |
+
+The panel on the right switches scenes (dam break, double dam break, drop into a pool, column
+collapse, sloshing wave), mesh resolution, physics parameters and rendering options.
+
+URL parameters let you share a setup: `?scene=drop&res=high&view=particles&mesh=1&paused=1`.
+
+## Scripts
+
+| Command | What it does |
+| --- | --- |
+| `npm run dev` | Vite dev server |
+| `npm run build` | type check and production build into `dist/` |
+| `npm test` | unit tests (mesh invariants and the CPU reference solver) |
+| `npm run typecheck` | TypeScript only |
+| `npm run test:gpu` | runs the WebGPU solver next to the CPU reference in headless Chromium and compares every intermediate field |
+| `npm run screenshot -- out.png "scene=drop&res=low" 1.0` | renders the app headlessly at simulated time 1.0 s |
+
+`test:gpu` and `screenshot` use Playwright's Chromium. When no GPU is available they fall back to
+SwiftShader (slow, but good enough to validate correctness). Install the browser once with
+`npx playwright install chromium`.
+
+## How it works
+
+Each substep runs this pipeline on the GPU (`src/sim/shaders/`):
+
+1. **p2g**: every particle splats its velocity into its tetrahedron's centre and three of its
+   nodes (the adjoint of the interpolation in step 9). It also splats barycentric-weighted
+   offsets for the level set. WebGPU has no float atomics, so the splats use fixed-point
+   `atomicAdd`.
+2. **node_gather**: Zhu–Bridson level set `φ = |x − x̄| − r` and particle density at nodes.
+3. **tet_gather / extrapolate**: normalised tet-centre velocities, then extended into empty tets.
+4. **forces**: gravity and the interactive brush. The pre-force velocity is kept for FLIP.
+5. **assemble**: one row per node of `A = [∇]ᵀV[∇]` with ghost-fluid terms for air neighbours,
+   into a CSR pattern precomputed from the mesh, plus `b = [∇]ᵀV u`.
+6. **PCG**: Jacobi-preconditioned conjugate gradients, warm started, with dot products reduced
+   on the GPU and a fixed iteration count, so nothing is read back.
+7. **project**: `u_t ← u_t − [∇]_t p̂`, where `p̂` includes the ghost pressures.
+8. **tet_to_nodes**: volume-weighted node averages of the new velocity and of its change.
+9. **g2p / advect**: FLIP/PIC blend using the subdivided-tet interpolation, then RK2 advection
+   and jump-and-walk point location through tet face adjacency.
+
+The mesh is a **body-centred cubic** tetrahedralization of the box: cube corners plus cube
+centres, with four congruent tetrahedra per interior face. Boundary faces get an extra node at
+their centre, so every boundary tet is half a BCC tet. As a result the mesh has no obtuse
+dihedral angles, the pressure matrix is an M-matrix, and the ghost-fluid boundary condition stays
+second-order everywhere. The mesh, adjacency, CSR sparsity and point-location seed grid are
+built once on the CPU in a Web Worker.
+
+The paper also re-meshes adaptively as the liquid moves. This project uses a static mesh, but
+the solver works with any tetrahedral mesh (nothing in the GPU code assumes BCC structure), so
+adaptive meshing can be added later.
+
+See [`docs/ALGORITHM.md`](docs/ALGORITHM.md) for the maths and [`docs/tetflip_paper.pdf`](docs/tetflip_paper.pdf)
+for the paper.
+
+## Project layout
+
 ```
-
-3. Open your browser and navigate to:
+src/
+  app/App.ts            UI, scene loading, frame loop, force brush
+  gpu/                  device setup, Kernel helper (layouts from WGSL bindings)
+  mesh/                 BCC mesh generation, precomputed topology, point location, worker
+  sim/
+    GpuSolver.ts        buffers and per-substep dispatch sequence
+    reference.ts        CPU reference of the same algorithm (f64)
+    shaders/*.wgsl      compute kernels
+    scenes.ts params.ts
+  render/
+    Renderer.ts         screen-space fluid pipeline and debug views
+    Camera.ts           orbit camera and pointer controls
+    shaders/*.wgsl
+tests/                  Vitest unit tests; tests/gpu/ holds the browser-side GPU check
+scripts/                headless GPU check and screenshot tools
 ```
-http://localhost:8000
-```
-
-4. Click "Start Simulation" to begin!
-
-## Architecture
-
-### Project Structure
-```
-Tetflip_webgpu/
-├── index.html          # Main HTML page
-├── styles.css          # Styling
-├── src/
-│   ├── main.js         # Application entry point
-│   ├── simulator.js    # TETFLIP simulation core
-│   ├── mesh.js         # Tetrahedral mesh management
-│   ├── particles.js    # Particle system
-│   ├── pressure_solver.js  # Incompressibility solver
-│   └── renderer.js     # WebGPU rendering
-└── README.md
-```
-
-### Core Components
-
-#### 1. TetFlipSimulator (`simulator.js`)
-The main simulation loop that orchestrates:
-- Particle-to-mesh velocity transfer (P2G)
-- Body force application (gravity)
-- Pressure solve for incompressibility
-- Mesh-to-particle velocity transfer (G2P)
-- Particle advection
-- Collision handling
-
-#### 2. TetrahedralMesh (`mesh.js`)
-Manages the tetrahedral mesh:
-- Regular grid-based mesh generation
-- Barycentric coordinate computation
-- Particle containment queries
-- Mesh topology and connectivity
-
-#### 3. ParticleSystem (`particles.js`)
-Handles fluid particles:
-- Position and velocity storage
-- Particle initialization
-- Data management
-
-#### 4. PressureSolver (`pressure_solver.js`)
-Enforces incompressibility:
-- Divergence computation
-- Pressure Poisson equation solve (Jacobi iteration)
-- Pressure gradient application
-
-#### 5. Renderer (`renderer.js`)
-WebGPU-based visualization:
-- Particle rendering (point sprites)
-- Mesh wireframe rendering
-- Camera controls
-- MVP matrix computation
-
-## TETFLIP Algorithm
-
-The simulation follows these steps each frame:
-
-1. **Particle to Grid (P2G)**: Transfer particle velocities to mesh nodes using barycentric interpolation
-2. **Body Forces**: Apply gravity and other external forces
-3. **Pressure Solve**: Solve Poisson equation ∇²p = ρ/Δt · ∇·v to find pressure field
-4. **Pressure Projection**: Update velocities to be divergence-free: v_new = v_old - Δt·∇p
-5. **Grid to Particle (G2P)**: Transfer updated velocities back to particles (FLIP method)
-6. **Advection**: Move particles according to their velocities
-7. **Collision**: Handle boundary collisions with domain walls
-
-## Controls
-
-### Simulation Controls
-- **Start/Pause**: Control simulation playback
-- **Reset**: Reset to initial dam break scenario
-
-### Parameters
-- **Time Step**: Simulation time step (affects stability and speed)
-- **Gravity**: Gravitational acceleration
-- **Viscosity**: Fluid viscosity (WIP)
-- **Particle Count**: Number of particles (requires reset)
-
-### Rendering Options
-- **Show Particles**: Toggle particle visualization
-- **Show Mesh**: Toggle tetrahedral mesh wireframe
-- **Show Velocity Field**: Toggle velocity vector visualization (WIP)
-
-### Camera Controls
-- **Left Mouse Drag**: Rotate camera
-- **Mouse Wheel**: Zoom in/out
-
-## Technical Details
-
-### FLIP vs PIC
-The implementation uses the FLIP (Fluid-Implicit-Particle) method, which reduces numerical dissipation compared to PIC (Particle-in-Cell):
-
-- **PIC**: v_particle = interpolate(v_grid)
-- **FLIP**: v_particle = v_particle + interpolate(v_grid_new - v_grid_old)
-
-The current implementation uses a FLIP ratio of 0.95 (95% FLIP, 5% PIC) for stability.
-
-### Tetrahedral Mesh
-The mesh uses a regular grid subdivided into tetrahedra. Each cube is split into 5 tetrahedra using a consistent pattern to avoid gaps. The current implementation uses an 8×8×8 grid resolution.
-
-### Pressure Solver
-The pressure solver uses Jacobi iterations to solve the Poisson equation. While simple, this method may require many iterations for convergence. Future versions will implement conjugate gradient or multigrid methods for better performance.
-
-## Performance
-
-Current performance metrics (approximate):
-- **Grid Resolution**: 8×8×8 (2,880 tetrahedra)
-- **Particles**: 1,000 (adjustable)
-- **Frame Rate**: 60 FPS (browser dependent)
-- **Computation**: CPU-based (GPU compute shaders planned)
-
-## Limitations & Future Work
-
-Current limitations:
-- Physics computation is CPU-based (not GPU-accelerated yet)
-- Fixed mesh resolution (no adaptive refinement)
-- Simplified pressure solver
-- No surface reconstruction
-- Limited to single-phase fluids
-
-Future improvements:
-- Implement GPU compute shaders for physics
-- Add adaptive mesh refinement
-- Surface reconstruction and marching cubes
-- SPH-style surface tension
-- Viscosity implementation
-- Multiple fluid scenarios
-- Performance profiling and optimization
-
-## References
-
-1. Ando, R., Thuerey, N., & Wojtan, C. (2013). A highly adaptive liquid simulator on tetrahedral meshes. *ACM Transactions on Graphics (TOG)*, 32(4), 1-10.
-
-2. Bridson, R. (2015). *Fluid Simulation for Computer Graphics* (2nd ed.). CRC Press.
-
-3. Zhu, Y., & Bridson, R. (2005). Animating sand as a fluid. *ACM Transactions on Graphics (TOG)*, 24(3), 965-972.
 
 ## License
 
-MIT License - See LICENSE file for details
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit issues or pull requests.
-
-## Acknowledgments
-
-- Based on the TETFLIP technique by Ryoichi Ando, Nils Thuerey, and Chris Wojtan
-- Inspired by the computer graphics and fluid simulation research community
-- Built with WebGPU for modern web-based GPU computing
+MIT. See [LICENSE](LICENSE).

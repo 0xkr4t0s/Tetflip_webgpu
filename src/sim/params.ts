@@ -20,6 +20,12 @@ export interface SimParams {
   volumeCorrection: number;
   /** Particles per unit volume at rest, set from the seeding density. */
   restDensity: number;
+  /**
+   * Rate (1/s) of the particle position correction of Ando et al. 2012, used by the paper to
+   * stop FLIP particles from clustering: particles closer than the rest spacing are pushed
+   * apart, tangentially only near the surface. 0 disables it.
+   */
+  separation: number;
 }
 
 /** Relative over-density tolerated before the volume correction kicks in (filters sampling noise). */
@@ -34,4 +40,15 @@ export const defaultParams = (): SimParams => ({
   extrapolationPasses: 2,
   volumeCorrection: 1,
   restDensity: 0,
+  separation: 10,
 });
+
+/** Rest spacing between particles implied by the rest density. */
+export const particleSpacing = (params: SimParams): number => Math.cbrt(1 / params.restDensity);
+
+/** Neighbours closer than this (in units of the particle spacing) are pushed apart. */
+export const SEPARATION_RADIUS = 1.0;
+/** Largest position correction per step, in units of the particle spacing. */
+export const SEPARATION_MAX_STEP = 0.25;
+/** Within this distance of the surface (in particle spacings) corrections are tangential only. */
+export const SEPARATION_SURFACE_BAND = 2.0;

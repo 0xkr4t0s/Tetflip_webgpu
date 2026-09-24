@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:gpu": "node scripts/gpu-check.mjs"
+    "test:gpu": "node scripts/gpu-check.mjs",
+    "screenshot": "node scripts/screenshot.mjs"
   },
   "devDependencies": {
     "@webgpu/types": "^0.1.74",
