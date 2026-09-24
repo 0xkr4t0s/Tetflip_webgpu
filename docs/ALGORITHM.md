@@ -1,333 +1,159 @@
-# TETFLIP Algorithm Documentation
+# Algorithm notes
 
-## Introduction
+These notes cover the numerics implemented in `src/sim/reference.ts` (CPU, f64) and
+`src/sim/shaders/*.wgsl` (GPU, f32). The two implementations mirror each other phase by phase,
+and `npm run test:gpu` checks that they agree.
 
-TETFLIP is a hybrid Eulerian-Lagrangian method for fluid simulation that combines:
-- **Tetrahedral meshes** for adaptive spatial discretization
-- **FLIP (Fluid-Implicit-Particle)** method for advection
-- **Pressure projection** for incompressibility
+## Discretization (Ando et al. 2013, §3)
 
-## Algorithm Overview
+| Quantity | Location | Representation |
+| --- | --- | --- |
+| velocity `u_t` | tetrahedron barycentre | 3-vector, piecewise constant |
+| pressure `p_i` | mesh node | scalar, piecewise linear |
+| level set `φ_i` | mesh node | scalar |
 
-### Main Simulation Loop
-
-Each simulation timestep follows these stages:
-
-```
-1. Particle to Grid (P2G) Transfer
-2. Apply Body Forces
-3. Solve Pressure Poisson Equation
-4. Apply Pressure Gradient
-5. Grid to Particle (G2P) Transfer
-6. Advect Particles
-7. Handle Collisions
-8. (Optional) Adapt Mesh
-```
-
-## Detailed Algorithm Steps
-
-### 1. Particle to Grid Transfer (P2G)
-
-**Purpose**: Transfer particle velocities to mesh nodes
-
-**Method**: Weighted average using barycentric coordinates
+A linear pressure field has a constant gradient on each tetrahedron:
 
 ```
-For each particle p:
-    1. Find containing tetrahedron T
-    2. Compute barycentric coordinates (w0, w1, w2, w3)
-    3. For each node i in T:
-        v_node[i] += w[i] * v_particle
-        weight[i] += w[i]
-        
-For each node i:
-    v_node[i] /= weight[i]  // Normalize
+[∇]_t p = Σ_a ∇σ_a p_a ,
 ```
 
-**Key Points**:
-- Uses barycentric interpolation for smooth transfer
-- Maintains momentum conservation
-- Handles particles near mesh boundaries
+where `σ_a` are the barycentric coordinates of tet `t`. Each tet stores its four barycentric
+planes `(∇σ_a, c_a)` with `σ_a(x) = ∇σ_a·x + c_a`. The same planes are used for point location,
+interpolation and the gradient operator.
 
-### 2. Apply Body Forces
+### Projection
 
-**Purpose**: Add external forces (gravity, wind, etc.)
-
-**Method**: Explicit force integration
+The projection finds the smallest change in kinetic energy that makes `u` divergence free:
 
 ```
-For each node i:
-    v_node[i] += gravity * dt
+q = argmin Σ_t V_t |u_t − [∇]_t q|²    (q = Δt p / ρ)
+⇒  A q = b,   A = [∇]ᵀ V [∇],   b = [∇]ᵀ V u,   u ← u − [∇] q
 ```
 
-**Key Points**:
-- Can add any external force field
-- Simple explicit Euler integration
-- Can be extended for other forces
+`A` is the P1 finite-element stiffness matrix: `A_ij = Σ_t V_t ∇σ_i·∇σ_j`. Its sparsity is the
+node adjacency, which is fixed for a static mesh, so the CSR pattern and, for each
+(node, incident tet) pair, the column slots of the tet's four nodes are precomputed. Assembly on
+the GPU then needs no searching and no atomics: each thread owns one row.
 
-### 3. Pressure Solve
+`b_i = Σ_t V_t ∇σ_i·u_t = −∫σ_i ∇·u + ∮σ_i u·n`. Driving it to zero gives both
+incompressibility and, at the domain walls, zero normal flux. The box walls therefore need no
+special handling in the solve.
 
-**Purpose**: Enforce incompressibility constraint (∇·v = 0)
+### Free surface: ghost fluid (Eqs. 6–12)
 
-**Method**: Solve Poisson equation ∇²p = ρ/dt · ∇·v
-
-#### 3.1 Compute Divergence
-
-```
-For each tetrahedron T:
-    div = approximate_divergence(T)
-    For each node i in T:
-        divergence[i] += div
-```
-
-#### 3.2 Solve for Pressure
-
-Using Jacobi iteration:
+Nodes with `φ ≥ 0` are air. For an air node `G` of a tet with liquid nodes `L`, the ghost
+pressure is a linear combination of the liquid pressures:
 
 ```
-For iteration = 1 to max_iterations:
-    For each node i:
-        // Simplified Jacobi: this is a basic approximation
-        // In practice, should use discretized Laplacian entries
-        p_new[i] = (sum(p_neighbors) - rhs[i]) / num_neighbors
-    
-    if converged:
-        break
+p_G = Σ_l w_l p_l,     w_l = (φ_G / φ̃_L) θ_l,     θ_l = K_lG / Σ_k K_kG,     φ̃_L = Σ θ_l φ_l
 ```
 
-**Note**: This is a simplified version. A proper implementation should use the discretized Laplacian matrix with appropriate coefficients based on mesh geometry.
+`K` is the tet's local stiffness matrix. This choice of `θ` makes the embedded matrix
+symmetric, since the liquid-row contribution `K_iG w_l ∝ K_iG K_lG` is symmetric in `i, l`, so
+CG still applies. `|φ_G / φ̃_L|` is clamped by `ghostClamp`.
 
-**Key Points**:
-- Can use more advanced solvers (Conjugate Gradient, Multigrid)
-- Boundary conditions are important
-- Convergence tolerance affects accuracy
+Two special cases:
 
-### 4. Apply Pressure Gradient
+- **Right dihedral angles.** BCC tetrahedra have 90° dihedral angles, so some `K_lG` are exactly
+  zero, or zero up to rounding. Couplings within `1e-5 K_GG` of zero are treated as zero. If all
+  of a ghost's couplings vanish, the ghost cannot affect the matrix, and uniform `θ` is used only
+  for the velocity update.
+- **Obtuse tets.** A positive coupling marks a poorly shaped tet, which falls back to first-order
+  `p_G = 0` (the paper blends this more gradually, Eq. 13). The mesh used here has none (see
+  below).
 
-**Purpose**: Update velocities to be divergence-free
+With exact linear `φ`, a pool at rest is reproduced **exactly**: the test
+`keeps a flat pool exactly at rest` checks this to 1e-6.
 
-**Method**: v_new = v_old - dt * ∇p
+### Velocity interpolation (§3, "Velocity Interpolation")
 
-```
-For each node i:
-    grad_p = compute_pressure_gradient(i)
-    v_node[i] -= dt * grad_p
-```
-
-**Key Points**:
-- Projects velocity onto divergence-free space
-- Satisfies incompressibility
-- Preserves tangential velocity components
-
-### 5. Grid to Particle Transfer (G2P)
-
-**Purpose**: Transfer updated velocities back to particles
-
-**Method**: FLIP/PIC blend
-
-#### Pure PIC (Particle-in-Cell)
-```
-v_particle = interpolate(v_grid)
-```
-
-#### Pure FLIP (Fluid-Implicit-Particle)
-```
-v_particle = v_particle + interpolate(v_grid_new - v_grid_old)
-```
-
-#### Blended FLIP/PIC
-```
-v_pic = interpolate(v_grid_new)
-v_flip = v_particle + interpolate(v_grid_new - v_grid_old)
-v_particle = (1 - α) * v_pic + α * v_flip
-```
-
-where α is the FLIP ratio (typically 0.95-0.99)
-
-**Key Points**:
-- FLIP reduces numerical dissipation
-- PIC adds stability
-- Blend ratio is tunable parameter
-
-### 6. Advect Particles
-
-**Purpose**: Move particles according to their velocities
-
-**Method**: Explicit Euler integration
+Tet-centre velocities are averaged to the nodes, weighted by volume. To interpolate at `x`, the
+tet is subdivided virtually around its centre `c`. `x` lies in the sub-tet formed by `c` and
+the face opposite the vertex with the smallest barycentric coordinate `m`, and there:
 
 ```
-For each particle p:
-    position[p] += velocity[p] * dt
+u(x) = 4m · u_t + Σ_a (σ_a − m) · ũ_a
 ```
 
-**Key Points**:
-- Can use higher-order integration (RK2, RK4)
-- Timestep size affects stability
-- CFL condition should be respected
+This is C⁰ and reproduces the tet-centre sample exactly. **Particle → mesh** uses the transpose
+of this operator, normalised by the transposed weights, so the two transfers are adjoint.
 
-### 7. Handle Collisions
+### FLIP update
 
-**Purpose**: Enforce domain boundaries and solid obstacles
-
-**Method**: Collision detection and response
+`u_old` is the mesh velocity before forces and projection. Particles receive
 
 ```
-For each particle p:
-    if outside_domain(p):
-        project_to_boundary(p)
-        apply_friction_and_restitution(p)
+v ← α (v + I(u − u_old)) + (1 − α) I(u),     α = flipRatio
 ```
 
-**Key Points**:
-- Coefficient of restitution controls bounciness
-- Friction affects sliding behavior
-- Can handle complex geometry
+and are advected with RK2 through `I(u)`, followed by jump-and-walk point location.
 
-### 8. Mesh Adaptation (Advanced)
+After the projection, only tets that touch the liquid hold projected velocities. Those velocities
+are extrapolated into neighbouring pure-air tets (two passes over face neighbours) before the
+node averages are formed. Without this, the node averages at the surface would mix in the
+free-fall velocity of unprojected air tets, and surface particles would be dragged down every
+step.
 
-**Purpose**: Refine mesh in regions of interest, coarsen elsewhere
+## Level set
 
-**Criteria**:
-- High velocity gradients
-- Surface proximity
-- Curvature
-- User-defined features
+Zhu–Bridson: `φ_i = |x_i − x̄_i| − r`, where `x̄_i` is the average of nearby particle positions
+weighted by the linear hat function of node `i`, and `r = surfaceRadius · h`. On a wall node the
+wall-normal component of `x_i − x̄_i` is zeroed, which is equivalent to mirroring the particles
+across the wall. Without this, wall nodes would turn into free surface.
 
-**Operations**:
-- Edge split (refinement)
-- Edge collapse (coarsening)
-- Face swap (quality improvement)
-- Node relocation (smoothing)
+## Particle position correction
 
-## Mathematical Foundations
-
-### Navier-Stokes Equations
-
-The incompressible Navier-Stokes equations:
+As in the paper (§3, "Manipulating FLIP particles", after Ando et al. 2012), particles are
+nudged apart after advection:
 
 ```
-∂v/∂t + (v·∇)v = -1/ρ ∇p + ν∇²v + g
-∇·v = 0
+Δx_i = k Σ_j (1 − d_ij / R) (x_i − x_j) / d_ij,     R = particle spacing,  k = min(1, rate·Δt) · spacing
 ```
 
-Where:
-- v: velocity field
-- p: pressure
-- ρ: density
-- ν: kinematic viscosity
-- g: body forces
+The domain walls act as mirrors. Within two particle spacings of the surface, the component of
+`Δx` along `∇φ` is removed so the surface stays smooth. `|Δx|` is capped at a quarter of the
+spacing. Only positions change; velocities are untouched.
 
-### Operator Splitting
+On the GPU the neighbour search uses a uniform grid with cell size `R`. Particles are
+counting-sorted into it each substep: `atomicAdd` gives per-cell counts and ranks, a
+multi-level exclusive scan turns the counts into cell offsets, and a scatter writes particle
+indices grouped by cell. The correction then visits the 27 surrounding cells.
 
-TETFLIP uses operator splitting to solve different terms separately:
+## Volume correction
 
-1. **Advection**: ∂v/∂t + (v·∇)v = 0
-2. **Body Forces**: ∂v/∂t = g
-3. **Viscosity**: ∂v/∂t = ν∇²v
-4. **Pressure**: ∂v/∂t = -1/ρ ∇p, subject to ∇·v = 0
+FLIP particles slowly bunch up. Where the relative particle density at a liquid node exceeds
+`1 + 0.2`, a small positive divergence `s = κ (ρ/ρ₀ − 1.2) / Δt` is requested by adding
+`s V_i / 4` to `b_i`. This lightweight substitute for the paper's particle position correction
+keeps the liquid's volume stable over long runs. Position correction alone can't do this:
+near the surface it only moves particles tangentially, so it can't restore volume that
+splashing has compressed below the grid scale.
 
-### Barycentric Coordinates
+## Mesh
 
-For a point P inside tetrahedron with vertices V0, V1, V2, V3:
+The domain is tetrahedralized with a body-centred cubic (BCC) lattice:
 
-```
-P = w0*V0 + w1*V1 + w2*V2 + w3*V3
-```
+- **Nodes**: cube corners, cube centres, and the centre of every boundary face.
+- **Interior**: every face shared by two cubes yields four tets, each built from one edge of
+  that face and the two cube centres. These are congruent tetrahedra whose dihedral angles are
+  60° and 90°.
+- **Boundary**: every boundary face yields four tets, each built from one face edge, the cube
+  centre and the face-centre node. Each is exactly half a BCC tet.
 
-where w0 + w1 + w2 + w3 = 1 and all wi ≥ 0
+No dihedral angle is obtuse, so every off-diagonal of `A` is ≤ 0. This makes `A` an M-matrix,
+and the ghost-fluid coefficients are always valid.
 
-Computed using volume ratios:
-```
-w[i] = Volume(P, other three vertices) / Volume(tetrahedron)
-```
+Precomputed per mesh: tet planes, volumes and centroids, face neighbours, node→tet incidence
+(CSR), node adjacency (CSR, the matrix pattern), column-slot maps, and a seed grid with
+spacing `h/2` for jump-and-walk point location.
 
-### Pressure Poisson Equation
+## GPU notes
 
-Taking divergence of pressure update:
-
-```
-∇·v_new = 0
-∇·(v_old - dt/ρ ∇p) = 0
-∇·v_old = dt/ρ ∇²p
-∇²p = ρ/dt ∇·v_old
-```
-
-This is a Poisson equation for pressure p.
-
-## Performance Considerations
-
-### Timestep Selection
-
-CFL condition:
-```
-dt ≤ CFL * h / |v_max|
-```
-
-where:
-- h: minimum mesh spacing
-- v_max: maximum velocity
-- CFL: Courant number (typically 0.5-1.0)
-
-### Spatial Resolution
-
-- Finer mesh → better detail, slower simulation
-- Coarser mesh → faster simulation, less detail
-- Adaptive meshing balances both
-
-### Solver Convergence
-
-- More iterations → better accuracy, slower
-- Better preconditioner → faster convergence
-- Multigrid methods → O(n) complexity
-
-## Implementation Tips
-
-### Numerical Stability
-
-1. **Clamp velocities** to prevent explosions
-2. **Use implicit methods** for stiff terms (viscosity)
-3. **Limit timestep** based on CFL condition
-4. **Check for NaN/Inf** values
-
-### Memory Management
-
-1. **Pre-allocate buffers** to avoid reallocations
-2. **Use typed arrays** for better performance
-3. **Minimize copies** between CPU and GPU
-4. **Batch operations** for efficiency
-
-### GPU Acceleration
-
-1. **Particle operations** are embarrassingly parallel
-2. **Sparse linear solvers** benefit from GPU
-3. **Mesh operations** need careful synchronization
-4. **Use compute shaders** for physics
-
-## References
-
-1. Ando, R., Thuerey, N., & Wojtan, C. (2013). "A highly adaptive liquid simulator on tetrahedral meshes." *SIGGRAPH 2013*
-
-2. Bridson, R. (2015). "Fluid Simulation for Computer Graphics" (2nd ed.)
-
-3. Zhu, Y., & Bridson, R. (2005). "Animating sand as a fluid." *SIGGRAPH 2005*
-
-4. Stam, J. (1999). "Stable fluids." *SIGGRAPH 1999*
-
-5. Losasso, F., Talton, J., Kwatra, N., & Fedkiw, R. (2008). "Two-way coupled SPH and particle level set fluid simulation." *IEEE TVCG*
-
-## Common Issues and Solutions
-
-### Issue: Particles leak through boundaries
-**Solution**: Use smaller timestep, improve collision detection, or add particle resampling
-
-### Issue: Simulation becomes unstable
-**Solution**: Reduce timestep, clamp velocities, check for degenerate mesh elements
-
-### Issue: Pressure solver doesn't converge
-**Solution**: Increase iterations, improve initial guess, use better preconditioner
-
-### Issue: Fluid appears too viscous
-**Solution**: Increase FLIP ratio, reduce artificial damping, check for numerical dissipation
-
-### Issue: Performance is slow
-**Solution**: Use GPU compute shaders, optimize mesh resolution, implement spatial acceleration structures
+- WebGPU has no float atomics, so the particle splat uses fixed-point `atomicAdd`: 16.16 for
+  velocities and 12.20 for the level-set sums. Low-weight air nodes need the extra precision
+  for accurate ghost pressures.
+- The CG solve runs a fixed number of iterations (warm started from the previous step), with
+  dot products reduced on the GPU, so a step never waits on the CPU. Residuals are read back
+  asynchronously for the stats panel only.
+- Each kernel declares its own bindings; `src/gpu/kernel.ts` parses them to build the bind group
+  layout, so bind groups are created from a name → buffer map.

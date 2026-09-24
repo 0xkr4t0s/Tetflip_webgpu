@@ -1,0 +1,208 @@
+:root {
+  --bg: #0d1117;
+  --panel: rgba(13, 17, 23, 0.72);
+  --text: #e6edf3;
+  --muted: #9aa7b4;
+  --accent: #4aa3ff;
+  --border: rgba(255, 255, 255, 0.08);
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+}
+
+#view {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+  cursor: grab;
+}
+
+#view:active {
+  cursor: grabbing;
+}
+
+.hud {
+  position: fixed;
+  z-index: 2;
+  background: var(--panel);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  pointer-events: none;
+}
+
+.hud a {
+  color: var(--accent);
+  pointer-events: auto;
+  text-decoration: none;
+}
+
+.hud-title {
+  top: 16px;
+  left: 16px;
+  padding: 10px 14px;
+}
+
+.hud-title h1 {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: 0.12em;
+}
+
+.hud-title p {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.hud-stats {
+  top: 84px;
+  left: 16px;
+  padding: 8px 14px;
+  font: 12px/1.6 ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+.hud-stats dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto auto;
+  column-gap: 14px;
+}
+
+.hud-stats dt {
+  color: var(--muted);
+}
+
+.hud-stats dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.hud-help {
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  padding: 8px 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--muted);
+  max-width: calc(100% - 32px);
+}
+
+kbd {
+  font: 11px ui-monospace, Menlo, monospace;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  background: rgba(5, 8, 12, 0.45);
+}
+
+.overlay[hidden] {
+  display: none;
+}
+
+.overlay-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 22px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  backdrop-filter: blur(12px);
+}
+
+.error-card {
+  flex-direction: column;
+  align-items: flex-start;
+  max-width: 440px;
+}
+
+.error-card h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.error-card p {
+  margin: 0;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* lil-gui panel */
+.lil-gui.root {
+  --background-color: var(--panel);
+  --widget-color: rgba(255, 255, 255, 0.08);
+  --focus-color: rgba(255, 255, 255, 0.14);
+  --number-color: var(--accent);
+  --string-color: var(--accent);
+  --font-size: 12px;
+  --input-font-size: 12px;
+  --widget-height: 22px;
+  top: 16px !important;
+  right: 16px !important;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  backdrop-filter: blur(10px);
+  max-height: calc(100% - 32px);
+}
+
+@media (max-width: 720px) {
+  .hud-stats,
+  .hud-help {
+    display: none;
+  }
+
+  .lil-gui.root {
+    --width: 220px;
+  }
+}

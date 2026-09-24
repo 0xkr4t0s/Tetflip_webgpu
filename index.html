@@ -1,117 +1,51 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TETFLIP Liquid Simulator - WebGPU</title>
-    <link rel="stylesheet" href="styles.css">
-</head>
-<body>
-    <div class="container">
-        <header>
-            <h1>TETFLIP Liquid Simulator</h1>
-            <p class="subtitle">Based on "A Highly Adaptive Liquid Simulator on Tetrahedral Meshes" (Ando et al., SIGGRAPH 2013)</p>
-        </header>
-        
-        <div class="main-content">
-            <div class="canvas-container">
-                <canvas id="renderCanvas"></canvas>
-                <div id="webgpu-error" class="error-message" style="display: none;">
-                    WebGPU is not supported in your browser. Please use a browser with WebGPU support.
-                </div>
-            </div>
-            
-            <div class="controls-panel">
-                <div class="control-section">
-                    <h3>Simulation Controls</h3>
-                    <button id="startBtn" class="btn btn-primary">Start Simulation</button>
-                    <button id="pauseBtn" class="btn btn-secondary" disabled>Pause</button>
-                    <button id="resetBtn" class="btn btn-secondary">Reset</button>
-                </div>
-                
-                <div class="control-section">
-                    <h3>Simulation Parameters</h3>
-                    
-                    <div class="control-group">
-                        <label for="timeStepSlider">Time Step: <span id="timeStepValue">0.016</span>s</label>
-                        <input type="range" id="timeStepSlider" min="0.001" max="0.05" step="0.001" value="0.016">
-                    </div>
-                    
-                    <div class="control-group">
-                        <label for="gravitySlider">Gravity: <span id="gravityValue">-9.8</span> m/s²</label>
-                        <input type="range" id="gravitySlider" min="-20" max="0" step="0.1" value="-9.8">
-                    </div>
-                    
-                    <div class="control-group">
-                        <label for="viscositySlider">Viscosity: <span id="viscosityValue">0.001</span></label>
-                        <input type="range" id="viscositySlider" min="0" max="0.1" step="0.001" value="0.001">
-                    </div>
-                    
-                    <div class="control-group">
-                        <label for="particleCountSlider">Particle Count: <span id="particleCountValue">1000</span></label>
-                        <input type="range" id="particleCountSlider" min="100" max="5000" step="100" value="1000">
-                    </div>
-                </div>
-                
-                <div class="control-section">
-                    <h3>Rendering</h3>
-                    
-                    <div class="control-group">
-                        <label>
-                            <input type="checkbox" id="showParticles" checked>
-                            Show Particles
-                        </label>
-                    </div>
-                    
-                    <div class="control-group">
-                        <label>
-                            <input type="checkbox" id="showMesh" checked>
-                            Show Mesh
-                        </label>
-                    </div>
-                    
-                    <div class="control-group">
-                        <label>
-                            <input type="checkbox" id="showVelocity">
-                            Show Velocity Field
-                        </label>
-                    </div>
-                </div>
-                
-                <div class="control-section">
-                    <h3>Statistics</h3>
-                    <div class="stats">
-                        <div class="stat-item">
-                            <span class="stat-label">FPS:</span>
-                            <span id="fps" class="stat-value">0</span>
-                        </div>
-                        <div class="stat-item">
-                            <span class="stat-label">Particles:</span>
-                            <span id="particleCount" class="stat-value">0</span>
-                        </div>
-                        <div class="stat-item">
-                            <span class="stat-label">Tetrahedra:</span>
-                            <span id="tetCount" class="stat-value">0</span>
-                        </div>
-                        <div class="stat-item">
-                            <span class="stat-label">Simulation Time:</span>
-                            <span id="simTime" class="stat-value">0.000</span>s
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="control-section">
-                    <h3>About</h3>
-                    <p class="info-text">
-                        This is an implementation of the TETFLIP technique for liquid simulation using WebGPU.
-                        The method combines FLIP (Fluid-Implicit-Particle) advection with tetrahedral mesh
-                        representation for highly adaptive liquid simulation.
-                    </p>
-                </div>
-            </div>
-        </div>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Real-time TETFLIP liquid simulation on tetrahedral meshes, running entirely on the GPU with WebGPU." />
+    <title>TETFLIP · WebGPU liquid</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 3 L28 26 H4 Z' fill='%234aa3ff'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <canvas id="view" aria-label="Liquid simulation view"></canvas>
+
+    <header class="hud hud-title">
+      <h1>TETFLIP</h1>
+      <p>Adaptive-ready liquid on tetrahedral meshes · <a href="https://doi.org/10.1145/2461912.2461982" target="_blank" rel="noopener">Ando, Thuerey &amp; Wojtan 2013</a></p>
+    </header>
+
+    <section class="hud hud-stats" aria-live="polite">
+      <dl id="stats"></dl>
+    </section>
+
+    <footer class="hud hud-help">
+      <span><kbd>drag</kbd> orbit</span>
+      <span><kbd>right-drag</kbd> pan</span>
+      <span><kbd>wheel</kbd> zoom</span>
+      <span><kbd>shift</kbd>+<kbd>drag</kbd> push liquid</span>
+      <span><kbd>space</kbd> pause</span>
+      <span><kbd>R</kbd> reset</span>
+      <span><kbd>V</kbd> view</span>
+      <span><kbd>M</kbd> mesh</span>
+    </footer>
+
+    <div id="overlay" class="overlay" hidden>
+      <div class="overlay-card">
+        <div class="spinner" aria-hidden="true"></div>
+        <p id="overlay-text">Building mesh…</p>
+      </div>
     </div>
-    
-    <script type="module" src="src/main.js"></script>
-</body>
+
+    <div id="error" class="overlay" hidden>
+      <div class="overlay-card error-card">
+        <h2>WebGPU unavailable</h2>
+        <p id="error-text"></p>
+        <p class="muted">Try a recent Chrome, Edge or Safari, or Firefox with WebGPU enabled.</p>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
 </html>
