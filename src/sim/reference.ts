@@ -17,7 +17,7 @@
 import type { PreparedMesh } from '../mesh/prepare';
 import { barycentric, locate } from '../mesh/prepare';
 import type { Vec3 } from '../math/vec3';
-import type { SimParams } from './params';
+import { DENSITY_DEADZONE, type SimParams } from './params';
 
 export interface ParticleState {
   count: number;
@@ -411,9 +411,6 @@ export class ReferenceSolver {
     }
   }
 }
-
-/** Relative over-density tolerated before the volume correction kicks in (filters sampling noise). */
-export const DENSITY_DEADZONE = 0.2;
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 

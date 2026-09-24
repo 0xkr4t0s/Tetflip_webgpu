@@ -22,6 +22,9 @@ export interface SimParams {
   restDensity: number;
 }
 
+/** Relative over-density tolerated before the volume correction kicks in (filters sampling noise). */
+export const DENSITY_DEADZONE = 0.2;
+
 export const defaultParams = (): SimParams => ({
   gravity: [0, -9.81, 0],
   flipRatio: 0.97,
