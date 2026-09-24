@@ -30,7 +30,7 @@ export class App {
   private readonly canvas: HTMLCanvasElement;
   private device!: GPUDevice;
   private renderer!: Renderer;
-  private readonly camera = new OrbitCamera();
+  readonly camera = new OrbitCamera();
   private solver: GpuSolver | null = null;
   private mesh: PreparedMesh | null = null;
   private scene: Scene = scenes[0];
@@ -54,6 +54,8 @@ export class App {
   private lastStats = 0;
   /** Pause automatically once this much time has been simulated (URL option `stopAt`). */
   private stopAt = Infinity;
+  /** Set by `advance`: the frame loop stops and a script drives the simulation instead. */
+  private scripted = false;
   private brushActive = false;
   private brushPoint: Vec3 | null = null;
 
@@ -131,6 +133,25 @@ export class App {
     return { width, height, rgba: btoa(binary) };
   }
 
+  /**
+   * Advances the simulation by `frames` display frames and waits for the GPU (for scripted
+   * recordings). The first call hands control to the script: the frame loop stops simulating
+   * and rendering, so every captured frame is exactly the requested number of steps apart.
+   */
+  async advance(frames: number): Promise<void> {
+    this.scripted = true;
+    if (!this.solver) return;
+    const substeps = this.settings.substeps;
+    const dt = (FRAME_DT * this.settings.timeScale) / substeps;
+    for (let i = 0; i < frames; i++) {
+      const encoder = this.device.createCommandEncoder({ label: 'advance' });
+      this.solver.encode(encoder, dt, substeps, false);
+      this.device.queue.submit([encoder.finish()]);
+      this.simTime += dt * substeps;
+    }
+    await this.device.queue.onSubmittedWorkDone();
+  }
+
   /** Frames rendered so far (exposed for automated checks). */
   get frames(): number {
     return this.frameCount;
@@ -198,7 +219,7 @@ export class App {
     const elapsed = Math.min(0.25, (now - this.lastFrame) / 1000);
     this.lastFrame = now;
     this.fps += (1 / Math.max(elapsed, 1e-3) - this.fps) * 0.05;
-    if (!this.solver || this.loading) return;
+    if (!this.solver || this.loading || this.scripted) return;
 
     const encoder = this.device.createCommandEncoder({ label: 'frame' });
     const collect = this.frameCount++ % 20 === 0;
