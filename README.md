@@ -5,6 +5,21 @@ It implements the discretization from [*A Highly Adaptive Liquid Simulator on Te
 Meshes*](https://doi.org/10.1145/2461912.2461982) (Ando, Thuerey & Wojtan, SIGGRAPH 2013) and
 renders the result as a smooth, refractive liquid surface.
 
+<p align="center">
+  <img src="docs/media/dam-break.gif" width="720" alt="Dam break: a block of water collapses, surges along the tank, climbs the far wall and rolls back">
+</p>
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/media/drop.gif" alt="A ball of water falls into a pool and throws up a splash"></td>
+    <td width="50%"><img src="docs/media/mesh.gif" alt="Dam break drawn as particles coloured by speed, over a slice of the tetrahedral mesh coloured by pressure"></td>
+  </tr>
+  <tr>
+    <td align="center">Drop into a pool</td>
+    <td align="center">Particles (coloured by speed) over a slice of the tetrahedral mesh (coloured by pressure)</td>
+  </tr>
+</table>
+
 - **TETFLIP pressure projection** (paper §3): velocities at tetrahedron centres, pressures at
   mesh nodes, and the projection `[∇]ᵀV[∇] p = [∇]ᵀV u` solved with Jacobi-preconditioned CG.
 - **Second-order free surface**: the paper's symmetric ghost-fluid coefficients (Eq. 12).
@@ -55,10 +70,20 @@ URL parameters let you share a setup: `?scene=drop&res=high&view=particles&mesh=
 | `npm run test:gpu` | runs the WebGPU solver next to the CPU reference in headless Chromium and compares every intermediate field |
 | `node scripts/gpu-check.mjs energy "cells=24&seconds=6"` | energy and volume history of the dam break on the GPU |
 | `npm run screenshot -- out.png "scene=drop&res=low" 1.0` | renders the app headlessly at simulated time 1.0 s |
+| `npm run record -- out.gif "scene=drop&res=low" --seconds=2` | records an animated GIF headlessly (options are listed at the top of `scripts/record-gif.mjs`) |
 
-`test:gpu` and `screenshot` use Playwright's Chromium. When no GPU is available they fall back to
-SwiftShader (slow, but good enough to validate correctness). Install the browser once with
-`npx playwright install chromium`.
+`test:gpu`, `screenshot` and `record` use Playwright's Chromium. When no GPU is available they
+fall back to SwiftShader (slow, but good enough to validate correctness). Install the browser once
+with `npx playwright install chromium`.
+
+The GIFs at the top of this page were recorded with SwiftShader (the medium-resolution dam break
+takes about an hour on four CPU cores):
+
+```bash
+npm run record -- docs/media/dam-break.gif "scene=dam-break&res=medium" --seconds=3.6 --size=720x405 --zoom=0.85
+npm run record -- docs/media/drop.gif "scene=drop&res=low" --seconds=2 --size=480x320
+npm run record -- docs/media/mesh.gif "scene=dam-break&res=low&view=particles&mesh=1" --seconds=2.4 --size=480x320 --zoom=0.85 --ss=1
+```
 
 ## How it works
 
@@ -116,7 +141,8 @@ src/
     Camera.ts           orbit camera and pointer controls
     shaders/*.wgsl
 tests/                  Vitest unit tests; tests/gpu/ holds the browser-side GPU check
-scripts/                headless GPU check and screenshot tools
+scripts/                headless GPU check, screenshot and GIF recording tools
+docs/                   algorithm notes, the paper, and the GIFs used in this README
 ```
 
 ## License
