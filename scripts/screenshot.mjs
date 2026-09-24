@@ -1,5 +1,5 @@
 // Opens the app in headless Chromium (WebGPU via SwiftShader), runs the simulation until the
-// requested simulated time and saves the rendered frame as a PNG. Headless SwiftShader cannot
+// requested simulated time (the app pauses itself there) and saves the rendered frame as a PNG. Headless SwiftShader cannot
 // present a WebGPU canvas, so the frame is rendered offscreen by the app's dev-only capture hook.
 // Usage: node scripts/screenshot.mjs out.png "scene=dam-break&res=low" 0.8
 import { writeFileSync } from 'node:fs';
@@ -50,7 +50,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   page.on('console', (m) => ['error', 'warning'].includes(m.type()) && errors.push(m.text()));
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.goto(`${server.resolvedUrls.local[0]}?${query}`);
+  await page.goto(`${server.resolvedUrls.local[0]}?${query}&stopAt=${until}`);
   await page.waitForFunction((t) => (window.__tetflip?.time ?? -1) >= t && window.__tetflip.frames > 3, Number(until), { timeout: 1_800_000, polling: 500 });
   const frame = await page.evaluate(() => window.__tetflip.capture());
   const time = await page.evaluate(() => window.__tetflip.time);

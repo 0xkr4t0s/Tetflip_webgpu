@@ -10,7 +10,7 @@ renders the result as a smooth, refractive liquid surface.
 - **Second-order free surface**: the paper's symmetric ghost-fluid coefficients (Eq. 12).
 - **FLIP particles** with the paper's subdivided-tetrahedron velocity interpolation and its
   adjoint for particle-to-mesh transfer.
-- **Everything on the GPU**: 17 small WGSL compute kernels, with no CPU round trips during a step.
+- **Everything on the GPU**: 22 small WGSL compute kernels, with no CPU round trips during a step.
 - **Screen-space fluid rendering**: sphere-impostor depth and thickness, bilateral smoothing, and
   Fresnel, refraction and Beer–Lambert absorption.
 - **Verified**: the GPU solver is checked field by field against an f64 CPU reference, and the
@@ -53,6 +53,7 @@ URL parameters let you share a setup: `?scene=drop&res=high&view=particles&mesh=
 | `npm test` | unit tests (mesh invariants and the CPU reference solver) |
 | `npm run typecheck` | TypeScript only |
 | `npm run test:gpu` | runs the WebGPU solver next to the CPU reference in headless Chromium and compares every intermediate field |
+| `node scripts/gpu-check.mjs energy "cells=24&seconds=6"` | energy and volume history of the dam break on the GPU |
 | `npm run screenshot -- out.png "scene=drop&res=low" 1.0` | renders the app headlessly at simulated time 1.0 s |
 
 `test:gpu` and `screenshot` use Playwright's Chromium. When no GPU is available they fall back to
@@ -74,10 +75,15 @@ Each substep runs this pipeline on the GPU (`src/sim/shaders/`):
    into a CSR pattern precomputed from the mesh, plus `b = [∇]ᵀV u`.
 6. **PCG**: Jacobi-preconditioned conjugate gradients, warm started, with dot products reduced
    on the GPU and a fixed iteration count, so nothing is read back.
-7. **project**: `u_t ← u_t − [∇]_t p̂`, where `p̂` includes the ghost pressures.
+7. **project**: `u_t ← u_t − [∇]_t p̂`, where `p̂` includes the ghost pressures. The projected
+   velocities are then extrapolated into the surrounding air tets.
 8. **tet_to_nodes**: volume-weighted node averages of the new velocity and of its change.
 9. **g2p / advect**: FLIP/PIC blend using the subdivided-tet interpolation, then RK2 advection
    and jump-and-walk point location through tet face adjacency.
+10. **position correction** (paper §3, after Ando et al. 2012): particles are counting-sorted
+    into a uniform grid (atomic counts, multi-level prefix scan, scatter). Particles closer than
+    the rest spacing are then pushed apart, only tangentially near the surface, so clusters
+    don't form.
 
 The mesh is a **body-centred cubic** tetrahedralization of the box: cube corners plus cube
 centres, with four congruent tetrahedra per interior face. Boundary faces get an extra node at

@@ -52,6 +52,8 @@ export class App {
   private fps = 60;
   private lastFrame = performance.now();
   private lastStats = 0;
+  /** Pause automatically once this much time has been simulated (URL option `stopAt`). */
+  private stopAt = Infinity;
   private brushActive = false;
   private brushPoint: Vec3 | null = null;
 
@@ -59,7 +61,7 @@ export class App {
     this.canvas = canvas;
   }
 
-  /** Applies ?scene=<id>&res=low|medium|high&view=particles&mesh=1&paused=1 from the URL. */
+  /** Applies ?scene=<id>&res=low|medium|high&view=particles&mesh=1&paused=1&stopAt=<s> from the URL. */
   private applyUrlOptions(): void {
     const q = new URLSearchParams(location.search);
     const scene = q.get('scene');
@@ -70,6 +72,8 @@ export class App {
     if (q.get('view') === 'particles') this.renderer.options.mode = 'particles';
     if (q.get('mesh') === '1') this.renderer.options.showMesh = true;
     if (q.get('paused') === '1') this.settings.paused = true;
+    const stopAt = Number(q.get('stopAt'));
+    if (stopAt > 0) this.stopAt = stopAt;
   }
 
   async start(): Promise<void> {
@@ -198,6 +202,7 @@ export class App {
 
     const encoder = this.device.createCommandEncoder({ label: 'frame' });
     const collect = this.frameCount++ % 20 === 0;
+    if (this.simTime >= this.stopAt) this.settings.paused = true;
     if (!this.settings.paused) {
       const substeps = this.settings.substeps;
       const dt = (FRAME_DT * this.settings.timeScale) / substeps;

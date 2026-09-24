@@ -1,6 +1,9 @@
 /**
- * Energy diagnostic: runs the dam break on the GPU and reports total mechanical energy per unit
- * particle mass over time for a few parameter variants. Energy must not grow.
+ * Energy and volume diagnostic: runs a scene on the GPU and reports mechanical energy per unit
+ * particle mass and mean particle height over time, for one or more parameter variants.
+ * Energy must not grow; after the dam break settles the mean height should approach half the
+ * rest depth (0.094 m for the default dam break).
+ *   node scripts/gpu-check.mjs energy 'cells=24&seconds=6&variants={"a":{},"b":{"volumeCorrection":0}}'
  */
 import { initGpu } from '../../src/gpu/device';
 import { createBccMesh } from '../../src/mesh/bcc';

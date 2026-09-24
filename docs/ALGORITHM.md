@@ -89,6 +89,12 @@ v ← α (v + I(u − u_old)) + (1 − α) I(u),     α = flipRatio
 
 and are advected with RK2 through `I(u)`, followed by jump-and-walk point location.
 
+After the projection, only tets that touch the liquid hold projected velocities. Those velocities
+are extrapolated into neighbouring pure-air tets (two passes over face neighbours) before the
+node averages are formed. Without this, the node averages at the surface would mix in the
+free-fall velocity of unprojected air tets, and surface particles would be dragged down every
+step.
+
 ## Level set
 
 Zhu–Bridson: `φ_i = |x_i − x̄_i| − r`, where `x̄_i` is the average of nearby particle positions
@@ -96,12 +102,32 @@ weighted by the linear hat function of node `i`, and `r = surfaceRadius · h`. O
 wall-normal component of `x_i − x̄_i` is zeroed, which is equivalent to mirroring the particles
 across the wall. Without this, wall nodes would turn into free surface.
 
+## Particle position correction
+
+As in the paper (§3, "Manipulating FLIP particles", after Ando et al. 2012), particles are
+nudged apart after advection:
+
+```
+Δx_i = k Σ_j (1 − d_ij / R) (x_i − x_j) / d_ij,     R = particle spacing,  k = min(1, rate·Δt) · spacing
+```
+
+The domain walls act as mirrors. Within two particle spacings of the surface, the component of
+`Δx` along `∇φ` is removed so the surface stays smooth. `|Δx|` is capped at a quarter of the
+spacing. Only positions change; velocities are untouched.
+
+On the GPU the neighbour search uses a uniform grid with cell size `R`. Particles are
+counting-sorted into it each substep: `atomicAdd` gives per-cell counts and ranks, a
+multi-level exclusive scan turns the counts into cell offsets, and a scatter writes particle
+indices grouped by cell. The correction then visits the 27 surrounding cells.
+
 ## Volume correction
 
 FLIP particles slowly bunch up. Where the relative particle density at a liquid node exceeds
 `1 + 0.2`, a small positive divergence `s = κ (ρ/ρ₀ − 1.2) / Δt` is requested by adding
 `s V_i / 4` to `b_i`. This lightweight substitute for the paper's particle position correction
-keeps the liquid's volume within a few percent over long runs.
+keeps the liquid's volume stable over long runs. Position correction alone can't do this:
+near the surface it only moves particles tangentially, so it can't restore volume that
+splashing has compressed below the grid scale.
 
 ## Mesh
 
